@@ -1,0 +1,52 @@
+flowchart LR
+    subgraph APPS["TradeNova workloads"]
+        PS["portfolio-service<br/>Python"]
+        TA["trade-api<br/>Java"]
+        EOD["eod-reconciliation<br/>Python batch job<br/>runs every 1–2 min"]
+    end
+
+    PS -->|HTTP call| TA
+
+    subgraph AGENT["OTel Collector — agent"]
+        direction TB
+        P1["memory_limiter"] --> P2["enrichment<br/>env, team, region"]
+        P2 --> P3["PII masking<br/>OTTL"]
+        P3 --> P4["filtering<br/>cost control"]
+        P4 --> P5["batch"]
+    end
+
+    TA -->|OTLP: metrics, logs, traces| P1
+    PS -->|OTLP: metrics, logs, traces| P1
+
+    P5 -->|logs| KAFKA[("Kafka<br/>log buffer topic")]
+    KAFKA --> GW["OTel Collector — gateway"]
+    GW --> LOKI[("Loki")]
+
+    P5 -->|traces| TEMPO[("Tempo<br/>+ metrics generator")]
+    P5 -->|metrics| PROM[("Prometheus")]
+    TEMPO -->|service graph + RED metrics| PROM
+
+    EOD -->|push| PGW["Pushgateway"]
+    PROM -->|scrape| PGW
+
+    subgraph INFRA["Infrastructure"]
+        NE["Platform host<br/>node exporter"]
+        subgraph AWS["Simulated AWS"]
+            EC2API["Fake EC2 API"]
+            MD1["market-data-1<br/>node exporter"]
+            MD2["market-data-2<br/>node exporter"]
+        end
+    end
+
+    PROM -->|scrape| NE
+    PROM -.->|discover by tags| EC2API
+    PROM -->|scrape| MD1
+    PROM -->|scrape| MD2
+
+    PROM -->|firing alerts| AM["Alertmanager"]
+    AM -->|email| MAIL["Local email inbox<br/>on-call"]
+
+    GRAF["Grafana"]
+    GRAF -.->|query| PROM
+    GRAF -.->|query| LOKI
+    GRAF -.->|query| TEMPO
